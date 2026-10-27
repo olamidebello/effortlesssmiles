@@ -1,0 +1,20 @@
+export const seedCatalog = [
+['svc-round','service','Single Crystal','A subtle signature sparkle. One round crystal, professionally placed.',5000,0,'Crystal','gem'],
+['svc-two','service','Double Sparkle','Two round crystals, styled your way.',7000,0,'Crystal','gem'],
+['svc-three','service','Triple Glow','Three round gems in a custom arrangement.',9000,0,'Crystal','sparkles'],
+['svc-four','service','Crystal Quartet','Four round gems for a bolder signature.',11000,0,'Crystal','gem'],
+['svc-shape','service','Signature Shape','Choose a statement shape from the studio collection.',7000,0,'Design','star'],
+['svc-shapes','service','Shape Duo','Two statement shapes, one distinctive smile.',9000,0,'Design','star'],
+['svc-butterfly','service','Butterfly Effect','A delicate butterfly arrangement with standout shine.',12000,0,'Design','butterfly'],
+['svc-creative','service','Creative Set','Eight gems in a personalized arrangement.',18000,0,'Design','sparkles'],
+['svc-color','service','Color Pop','A colored crystal accent, chosen just for you.',6000,0,'Crystal','gem'],
+['svc-full','service','Full Tooth Shine','An all-over gem design, tailored in consultation.',15000,0,'Design','gem'],
+['svc-express','service','Express Whitening','A focused studio whitening session. Suitability assessed before treatment.',6500,0,'Whitening','sun'],
+['svc-signature','service','Signature Whitening','Our signature studio whitening appointment.',9900,0,'Whitening','sun'],
+['svc-premium','service','Premium Whitening','An extended consultation and whitening experience.',14900,0,'Whitening','sun'],
+['prod-kit','product','At-Home Whitening Kit','LED tray and whitening essentials. Supplier and stock approval pending.',4999,0,'Whitening','kit'],
+['prod-pen','product','Smile Touch-Up Pen','A convenient touch-up essential. Supplier and stock approval pending.',1999,0,'Aftercare','pen'],
+['prod-care','product','Smile Maintenance Kit','An oral-care pouch and daily care accessories. Stock approval pending.',2499,0,'Aftercare','bag'],
+['prod-gem','product','Crystal Selection','Loose decorative crystals for qualified professional use. Stock approval pending.',1499,0,'Crystal','gem'],
+].map(([id,kind,name,description,price,stock,category,icon])=>({id:String(id),kind:String(kind),name:String(name),description:String(description),price:Number(price),stock:Number(stock),category:String(category),icon:String(icon),active:1}));
+export const defaults={slogan:'Your smile. Your signature sparkle.',location:'Studio location to be confirmed',timezone:'America/Chicago',contactEmail:'',bookingEnabled:true,shopEnabled:true,offlineEnabled:true,stripeEnabled:false,paypalEnabled:false,openHour:10,closeHour:18,depositPercent:25,promoCode:'FIRSTSPARKLE',promoPercent:10,announcement:'A little sparkle. A whole lot of you.',shippingNote:'Studio pickup only. Address provided with your confirmation.',careText:'Your provider will supply product-specific preparation and aftercare instructions at your appointment.',cancelText:'Contact the studio to request changes or cancellation. Payment refunds are reviewed separately.'};
