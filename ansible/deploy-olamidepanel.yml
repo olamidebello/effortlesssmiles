@@ -329,13 +329,20 @@
         - name: Initialize administrator without resetting an existing account
           become_user: effortlesssmiles
           ansible.builtin.command:
-            argv: ['{{ es_node_dir }}/bin/node', deploy/manage.mjs, bootstrap-admin]
+            argv: ['{{ es_node_dir }}/bin/node', deploy/bootstrap-admin.mjs]
             chdir: '{{ es_release }}'
-            stdin: '{{ es_bootstrap.content | b64decode }}'
+            stdin: '{{ es_bootstrap.content }}'
           environment:
             ES_DATA_DIR: /var/lib/effortlesssmiles
           no_log: true
-          changed_when: true
+          register: es_admin_setup
+          failed_when: false
+          changed_when: es_admin_setup.rc == 0
+        - name: Verify administrator initialization with credential-free diagnostics
+          ansible.builtin.assert:
+            that: es_admin_setup.rc == 0
+            fail_msg: 'Administrator initialization failed: {{ es_admin_setup.stdout if es_admin_setup.stdout in ["INVALID_CREDENTIAL_FILE", "ACCOUNT_PERMISSION_CONFLICT", "INVALID_ADMIN_EMAIL", "INVALID_PASSWORD_LENGTH", "DATABASE_BUSY", "DATABASE_PERMISSION_ERROR", "MIGRATIONS_REQUIRED", "ADMIN_SETUP_FAILED"] else "ADMIN_SETUP_FAILED" }}. Credentials were not logged.'
+
         - name: Create protected runtime settings preserving existing payment secrets
           ansible.builtin.copy:
             dest: /etc/effortlesssmiles/runtime.env
@@ -394,7 +401,7 @@
           ansible.builtin.uri:
             url: 'http://127.0.0.1:{{ es_selected_port }}{{ item }}'
             status_code: 200
-          loop: [/api/studio, '/api/demo?role=customer', /install, /downloads/effortless-smiles-preview.apk]
+          loop: [/api/studio, '/api/demo?role=customer', /install, /terms, /privacy, /downloads/effortless-smiles-preview.apk]
         - name: Resume application traffic
           ansible.builtin.file:
             path: /run/effortlesssmiles-maintenance

@@ -155,3 +155,7 @@ The managed route includes IPv4 and IPv6 listeners, obtains HTTPS through Certbo
 ### Address-specific routes and reload timing
 
 If a local routing check returns `x-sprintforge-route: managed-v2`, an address-specific listener can take precedence over the wildcard listeners, or the request can arrive while old Nginx workers are retiring. Deployment now adds the exact domain to existing address-specific IPv4/IPv6 listener groups discovered from `nginx -T`, without creating new address groups, declaring a default server or changing SprintForge routes. The local sentinel request bypasses HTTP proxy environment settings and retries for ten seconds after reload. HTTPS checks also bypass proxy settings. The sentinel must match the exact Effortless Smiles domain before deployment proceeds. Nginx validation and deployment rollback remain enabled.
+
+### Administrator bootstrap transport
+
+Ansible 2.14 can implicitly convert decoded JSON into a dictionary before passing a command's stdin, producing a non-JSON string. The installer now passes the slurped base64 text unchanged to `deploy/bootstrap-admin.mjs`, which decodes and validates it internally. The administrator credential file is retained across retries, existing administrators keep their password, and failures emit only fixed diagnostic codes. Never disable `no_log` or paste the bootstrap credential file into deployment logs.
