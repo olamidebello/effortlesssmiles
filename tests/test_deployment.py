@@ -25,4 +25,16 @@ class PreflightTests(unittest.TestCase):
   for tls in [False,True]:
    rendered=env.get_template('effortlesssmiles.nginx.j2').render(es_domain='studio.example',es_selected_port=18773,es_tls_ready=tls)
    self.assertIn('proxy_pass http://127.0.0.1:18773;',rendered);self.assertIn('oai-authenticated-user-id "";',rendered);self.assertIn('/.es-deploy-check',rendered);self.assertNotIn('root /opt/',rendered);self.assertEqual('listen 443 ssl;' in rendered,tls)
+class NodeSelectionTests(unittest.TestCase):
+ def test_actual_playbook_selects_only_requested_lts_major(self):
+  from ansible.parsing.dataloader import DataLoader
+  from ansible.template import Templar
+  loader=DataLoader()
+  play=loader.load_from_file(str(ROOT/'ansible/deploy-olamidepanel.yml'))[0]
+  task=next(t for t in play['tasks'] if t.get('name')=='Find matching Node LTS releases')
+  catalog=[{'version':'v25.1.0','lts':False},{'version':'v24.9.0','lts':False},{'version':'v24.8.0','lts':'Krypton'},{'version':'v22.20.0','lts':'Jod'}]
+  for major in [24,'24']:
+   templar=Templar(loader=loader,variables={'es_node_catalog':{'json':catalog},'es_node_major':major})
+   selected=templar.template(task['ansible.builtin.set_fact']['es_node_candidates'])
+   self.assertEqual([r['version'] for r in selected],['v24.8.0'])
 if __name__=='__main__':unittest.main()

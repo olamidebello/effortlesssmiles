@@ -105,9 +105,16 @@
         return_content: true
         validate_certs: true
       register: es_node_catalog
+    - name: Find matching Node LTS releases
+      ansible.builtin.set_fact:
+        es_node_candidates: '{{ es_node_catalog.json | selectattr("version", "match", "^v" ~ (es_node_major | string) ~ "[.]") | selectattr("lts") | list }}'
+    - name: Validate Node release availability
+      ansible.builtin.assert:
+        that: es_node_candidates | length > 0
+        fail_msg: 'Official Node catalog contains no Node {{ es_node_major }} LTS release. Check https://nodejs.org/dist/index.json and es_node_major.'
     - name: Select latest Node 24 LTS without changing system Node
       ansible.builtin.set_fact:
-        es_node_version: '{{ (es_node_catalog.json | selectattr("version", "match", "^v" ~ es_node_major ~ "\\.") | selectattr("lts") | first).version }}'
+        es_node_version: '{{ (es_node_candidates | first).version }}'
         es_node_arch: '{{ {"x86_64":"x64", "aarch64":"arm64"}[ansible_facts.architecture] }}'
     - name: Record private Node installation path
       ansible.builtin.set_fact:
