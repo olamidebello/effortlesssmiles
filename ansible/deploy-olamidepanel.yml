@@ -84,6 +84,11 @@
     - name: Record previous release
       ansible.builtin.set_fact:
         es_previous: '{{ es_current.stat.lnk_source | default("") }}'
+    - name: Repair only this domain's stale Nginx aliases with backups
+      ansible.builtin.command:
+        argv: [python3, '{{ es_root }}/source/deploy/repair-routing.py', --domain, '{{ es_domain }}', --managed-vhost, '{{ es_vhost }}', --backup, '{{ es_backup }}']
+      register: es_routing_repair
+      changed_when: (es_routing_repair.stdout | from_json).changed
     - name: Check Nginx conflicts and select a private available port
       ansible.builtin.command:
         argv: [python3, '{{ es_root }}/source/deploy/preflight.py', --domain, '{{ es_domain }}', --managed-vhost, '{{ es_vhost }}', --port-file, /etc/effortlesssmiles/port, --preferred-port, '{{ es_preferred_port | string }}']
@@ -386,6 +391,12 @@
           ansible.builtin.command:
             argv: [curl, --fail, --silent, --show-error, --resolve, '{{ es_domain }}:443:127.0.0.1', 'https://{{ es_domain }}/healthz']
           changed_when: false
+        - name: Verify HTTPS serves this application's exact-domain sentinel
+          ansible.builtin.command:
+            argv: [curl, --fail, --silent, --show-error, --resolve, '{{ es_domain }}:443:127.0.0.1', 'https://{{ es_domain }}/.es-deploy-check']
+          register: es_https_identity
+          changed_when: false
+          failed_when: es_https_identity.rc != 0 or es_https_identity.stdout != 'effortlesssmiles:' ~ es_domain
         - name: Write successful deployment report
           ansible.builtin.copy:
             dest: '{{ es_report }}'

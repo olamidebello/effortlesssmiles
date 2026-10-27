@@ -145,3 +145,9 @@ ansible-playbook -i localhost, -c local --syntax-check ansible/deploy-olamidepan
 ```
 
 The standalone integration test uses disposable local data and checks login, customer-only signup, forged identity headers, server-side role checks, conflicting bookings, cancellation, exact checkout totals, offline payment authority, idempotent stock deduction, demo transaction blocking and install/download endpoints. It never calls live payment providers.
+
+### Automatic repair when the domain shows SprintForge or another site
+
+Rerun `bash /tmp/effortless-install.sh` as root. The installer pulls the latest source, backs up foreign Nginx configuration files under `/var/backups/effortlesssmiles/<timestamp>/routing`, and removes only the exact Effortless Smiles hostname from their `server_name` lists. Other hostnames, upstream ports, services, databases and site contents remain intact. An otherwise empty name list becomes the inert `effortlesssmiles-detached.invalid` name. Nginx configuration is validated; edits are restored immediately if validation fails. No reload occurs at this repair step; the deployment later installs and validates the dedicated route before reloading.
+
+The managed route includes IPv4 and IPv6 listeners, obtains HTTPS through Certbot and verifies the exact HTTPS sentinel as well as app health. Existing invalid Nginx configurations and unusual directives that cannot be safely edited stop deployment with diagnostics. This cannot repair DNS or a third-party proxy from the server; point both A and any AAAA records at this server, and purge any external cached wrong-site page. If a later build step fails, rerun after correcting the reported failure; routing backups remain available in the manifest.

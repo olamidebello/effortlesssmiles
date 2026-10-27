@@ -1,6 +1,7 @@
 # Managed only by Effortless Smiles deployment. Olamidepanel keeps its own port.
 server {
     listen 80;
+    listen [::]:80;
     server_name {{ es_domain }};
     location ^~ /.well-known/acme-challenge/ { root /var/www/effortlesssmiles-acme; }
     location = /.es-deploy-check { default_type text/plain; return 200 'effortlesssmiles:{{ es_domain }}'; }
@@ -9,6 +10,7 @@ server {
 }
 server {
     listen 443 ssl;
+    listen [::]:443 ssl;
     server_name {{ es_domain }};
     ssl_certificate /etc/letsencrypt/live/{{ es_domain }}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{{ es_domain }}/privkey.pem;

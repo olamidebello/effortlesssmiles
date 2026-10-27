@@ -25,6 +25,30 @@ class PreflightTests(unittest.TestCase):
   for tls in [False,True]:
    rendered=env.get_template('effortlesssmiles.nginx.j2').render(es_domain='studio.example',es_selected_port=18773,es_tls_ready=tls)
    self.assertIn('proxy_pass http://127.0.0.1:18773;',rendered);self.assertIn('oai-authenticated-user-id "";',rendered);self.assertIn('/.es-deploy-check',rendered);self.assertNotIn('root /opt/',rendered);self.assertEqual('listen 443 ssl;' in rendered,tls)
+class RoutingRepairTests(unittest.TestCase):
+ def test_detaches_only_exact_domain_and_preserves_sprintforge(self):
+  detach=runpy.run_path(str(ROOT/'deploy/repair-routing.py'))['detach']
+  source='server {\n server_name sprintforge.example effortlesssmiles.afribulkhub.com;\n proxy_pass http://127.0.0.1:8099;\n}\n'
+  fixed=detach(source,'effortlesssmiles.afribulkhub.com')
+  self.assertIn('server_name sprintforge.example;',fixed)
+  self.assertIn('proxy_pass http://127.0.0.1:8099;',fixed)
+  self.assertEqual(detach(fixed,'effortlesssmiles.afribulkhub.com'),fixed)
+ def test_single_domain_comments_and_multiline(self):
+  detach=runpy.run_path(str(ROOT/'deploy/repair-routing.py'))['detach']
+  source='# server_name studio.example;\n server_name\n studio.example;\n server_name *.example;'
+  fixed=detach(source,'studio.example')
+  self.assertIn('# server_name studio.example;',fixed)
+  self.assertIn('effortlesssmiles-detached.invalid;',fixed)
+  self.assertIn('server_name *.example;',fixed)
+ def test_failed_nginx_validation_restores_original_file(self):
+  main=runpy.run_path(str(ROOT/'deploy/repair-routing.py'))['main']
+  with tempfile.TemporaryDirectory() as temp:
+   config=pathlib.Path(temp)/'other.conf';original='server_name studio.example other.example;\n';config.write_text(original)
+   replies=[subprocess.CompletedProcess([],0,'# configuration file '+str(config)+':\n'+original,''),subprocess.CompletedProcess([],1,'','invalid config')]
+   args=['repair-routing.py','--domain','studio.example','--managed-vhost',temp+'/managed.conf','--backup',temp+'/backups']
+   with patch('sys.argv',args),patch('subprocess.run',side_effect=replies):
+    with self.assertRaisesRegex(RuntimeError,'invalid config'):main()
+   self.assertEqual(config.read_text(),original)
 class NodeSelectionTests(unittest.TestCase):
  def test_actual_playbook_selects_only_requested_lts_major(self):
   from ansible.parsing.dataloader import DataLoader
