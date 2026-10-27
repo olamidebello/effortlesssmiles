@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  manifest: "/manifest.webmanifest",
   title: "Effortless Smiles | Your signature sparkle",
   description: "Tooth gems, whitening, and smile essentials. Your smile. Your signature sparkle.",
   icons: {

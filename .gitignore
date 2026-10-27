@@ -43,3 +43,10 @@ yarn-error.log*
 
 # OS metadata
 .DS_Store
+
+# Android local build and private signing material
+/mobile/android/build/
+/mobile/android/signing/
+*.p12
+*.jks
+*.idsig
