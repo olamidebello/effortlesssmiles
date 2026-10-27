@@ -25,6 +25,18 @@ class PreflightTests(unittest.TestCase):
   for tls in [False,True]:
    rendered=env.get_template('effortlesssmiles.nginx.j2').render(es_domain='studio.example',es_selected_port=18773,es_tls_ready=tls)
    self.assertIn('proxy_pass http://127.0.0.1:18773;',rendered);self.assertIn('oai-authenticated-user-id "";',rendered);self.assertIn('/.es-deploy-check',rendered);self.assertNotIn('root /opt/',rendered);self.assertEqual('listen 443 ssl;' in rendered,tls)
+ def test_address_specific_routes_cover_loopback_and_public_interfaces(self):
+  env=Environment(loader=FileSystemLoader(str(ROOT/'ansible/templates')),undefined=StrictUndefined)
+  for tls in [False,True]:
+   rendered=env.get_template('effortlesssmiles.nginx.j2').render(es_domain='studio.example',es_selected_port=18773,es_tls_ready=tls,es_listener_groups={'80':['127.0.0.1','154.16.170.86','[::1]','[2001:db8::10]'],'443':['127.0.0.1','154.16.170.86','[::1]','[2001:db8::10]']})
+   for address in ['127.0.0.1','154.16.170.86','[::1]','[2001:db8::10]']:
+    self.assertIn('listen '+address+':80;',rendered)
+    self.assertEqual('listen '+address+':443 ssl;' in rendered,tls)
+   self.assertNotIn('default_server',rendered)
+ def test_discovery_preserves_distinct_http_and_https_listener_groups(self):
+  discover=runpy.run_path(str(ROOT/'deploy/nginx-listeners.py'))['discover']
+  groups=discover('listen 80; listen 127.0.0.1:80; listen 154.16.170.86:443 ssl; listen [::1]:443 ssl; # listen 10.0.0.1:80;\n listen 0.0.0.0:80; listen [::]:443 ssl;')
+  self.assertEqual(groups,{'80':['127.0.0.1'],'443':['154.16.170.86','[::1]']})
 class RoutingRepairTests(unittest.TestCase):
  def test_detaches_only_exact_domain_and_preserves_sprintforge(self):
   detach=runpy.run_path(str(ROOT/'deploy/repair-routing.py'))['detach']

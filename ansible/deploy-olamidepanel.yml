@@ -89,6 +89,14 @@
         argv: [python3, '{{ es_root }}/source/deploy/repair-routing.py', --domain, '{{ es_domain }}', --managed-vhost, '{{ es_vhost }}', --backup, '{{ es_backup }}']
       register: es_routing_repair
       changed_when: (es_routing_repair.stdout | from_json).changed
+    - name: Discover existing address-specific Nginx listener groups
+      ansible.builtin.command:
+        argv: [python3, '{{ es_root }}/source/deploy/nginx-listeners.py']
+      register: es_listener_discovery
+      changed_when: false
+    - name: Record existing listener groups without changing other domain defaults
+      ansible.builtin.set_fact:
+        es_listener_groups: '{{ es_listener_discovery.stdout | from_json }}'
     - name: Check Nginx conflicts and select a private available port
       ansible.builtin.command:
         argv: [python3, '{{ es_root }}/source/deploy/preflight.py', --domain, '{{ es_domain }}', --managed-vhost, '{{ es_vhost }}', --port-file, /etc/effortlesssmiles/port, --preferred-port, '{{ es_preferred_port | string }}']
@@ -241,12 +249,16 @@
         - name: Verify local domain route beats wildcard vhosts
           ansible.builtin.uri:
             url: http://127.0.0.1/.es-deploy-check
+            use_proxy: false
             headers:
               Host: '{{ es_domain }}'
             return_content: true
             status_code: 200
           register: es_route
-          failed_when: es_route.content != 'effortlesssmiles:' ~ es_domain
+          failed_when: es_route.content | default('') != 'effortlesssmiles:' ~ es_domain
+          until: es_route.status | default(0) == 200 and es_route.content | default('') == 'effortlesssmiles:' ~ es_domain
+          retries: 10
+          delay: 1
         - name: Obtain or renew HTTPS certificate using existing web server
           ansible.builtin.command:
             argv: [certbot, certonly, --webroot, -w, /var/www/effortlesssmiles-acme, --cert-name, '{{ es_domain }}', -d, '{{ es_domain }}', --email, '{{ es_certbot_email }}', --agree-tos, --non-interactive, --keep-until-expiring]
@@ -389,11 +401,11 @@
             state: absent
         - name: Verify local HTTPS certificate and exact domain routing
           ansible.builtin.command:
-            argv: [curl, --fail, --silent, --show-error, --resolve, '{{ es_domain }}:443:127.0.0.1', 'https://{{ es_domain }}/healthz']
+            argv: [curl, --noproxy, "*", --fail, --silent, --show-error, --resolve, '{{ es_domain }}:443:127.0.0.1', 'https://{{ es_domain }}/healthz']
           changed_when: false
         - name: Verify HTTPS serves this application's exact-domain sentinel
           ansible.builtin.command:
-            argv: [curl, --fail, --silent, --show-error, --resolve, '{{ es_domain }}:443:127.0.0.1', 'https://{{ es_domain }}/.es-deploy-check']
+            argv: [curl, --noproxy, "*", --fail, --silent, --show-error, --resolve, '{{ es_domain }}:443:127.0.0.1', 'https://{{ es_domain }}/.es-deploy-check']
           register: es_https_identity
           changed_when: false
           failed_when: es_https_identity.rc != 0 or es_https_identity.stdout != 'effortlesssmiles:' ~ es_domain
