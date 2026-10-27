@@ -1,0 +1,6 @@
+# Optional overrides. Do not put merchant keys or passwords in this file.
+es_domain: effortlesssmiles.afribulkhub.com
+es_admin_email: dobcalldemo@gmail.com
+es_certbot_email: dobcalldemo@gmail.com
+es_preferred_port: 18773
+es_revision: main

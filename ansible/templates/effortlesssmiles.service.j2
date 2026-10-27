@@ -1,0 +1,22 @@
+[Unit]
+Description=Effortless Smiles standalone studio
+After=network.target
+[Service]
+Type=simple
+User=effortlesssmiles
+Group=effortlesssmiles
+WorkingDirectory=/opt/effortlesssmiles/current
+EnvironmentFile=/etc/effortlesssmiles/runtime.env
+ExecStart={{ es_node_dir }}/bin/node /opt/effortlesssmiles/current/deploy/server.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/effortlesssmiles
+ReadOnlyPaths=/opt/effortlesssmiles /etc/effortlesssmiles
+[Install]
+WantedBy=multi-user.target

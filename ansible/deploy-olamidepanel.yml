@@ -1,0 +1,460 @@
+---
+- name: Pull and deploy Effortless Smiles alongside Olamidepanel
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    es_repo: https://github.com/olamidebello/effortlesssmiles.git
+    es_revision: main
+    es_domain: effortlesssmiles.afribulkhub.com
+    es_admin_email: dobcalldemo@gmail.com
+    es_certbot_email: '{{ es_admin_email }}'
+    es_preferred_port: 18773
+    es_root: /opt/effortlesssmiles
+    es_vhost: /etc/nginx/sites-available/effortlesssmiles.conf
+    es_report: /var/lib/effortlesssmiles/deploy-report.json
+    es_node_major: '24'
+    es_pnpm_version: 11.25.0
+  tasks:
+    - name: Validate supported host and variables
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.os_family == 'Debian'
+          - ansible_facts.architecture in ['x86_64', 'aarch64']
+          - es_domain is match('^[a-z0-9][a-z0-9.-]+[a-z0-9]$')
+          - es_admin_email is match('^[^@\s]+@[^@\s]+\.[^@\s]+$')
+          - es_preferred_port | int >= 1024
+          - es_preferred_port | int <= 65525
+        fail_msg: Use Debian/Ubuntu with a valid hostname and administrator email.
+    - name: Install host prerequisites without replacing Olamidepanel
+      ansible.builtin.apt:
+        name: [git, nginx, python3, ca-certificates, curl, xz-utils, certbot]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - name: Create isolated runtime and build identities
+      ansible.builtin.user:
+        name: '{{ item }}'
+        system: true
+        create_home: false
+        shell: /usr/sbin/nologin
+      loop: [effortlesssmiles, effortlesssmiles-build]
+    - name: Create root-owned deployment directories
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - '{{ es_root }}'
+        - '{{ es_root }}/releases'
+        - '{{ es_root }}/runtime'
+        - /etc/effortlesssmiles
+        - /var/www/effortlesssmiles-acme
+    - name: Create persistent private database directory
+      ansible.builtin.file:
+        path: /var/lib/effortlesssmiles
+        state: directory
+        owner: effortlesssmiles
+        group: effortlesssmiles
+        mode: '0750'
+    - name: Create build cache
+      ansible.builtin.file:
+        path: /var/cache/effortlesssmiles-build
+        state: directory
+        owner: effortlesssmiles-build
+        group: effortlesssmiles-build
+        mode: '0750'
+    - name: Pull source without discarding local edits
+      ansible.builtin.git:
+        repo: '{{ es_repo }}'
+        dest: '{{ es_root }}/source'
+        version: '{{ es_revision }}'
+        force: false
+      register: es_git
+    - name: Resolve deployment identity
+      ansible.builtin.set_fact:
+        es_release: '{{ es_root }}/releases/{{ es_git.after }}'
+        es_backup: '/var/backups/effortlesssmiles/{{ ansible_date_time.iso8601_basic_short }}'
+    - name: Inspect current release
+      ansible.builtin.stat:
+        path: '{{ es_root }}/current'
+      register: es_current
+    - name: Record previous release
+      ansible.builtin.set_fact:
+        es_previous: '{{ es_current.stat.lnk_source | default("") }}'
+    - name: Check Nginx conflicts and select a private available port
+      ansible.builtin.command:
+        argv: [python3, '{{ es_root }}/source/deploy/preflight.py', --domain, '{{ es_domain }}', --managed-vhost, '{{ es_vhost }}', --port-file, /etc/effortlesssmiles/port, --preferred-port, '{{ es_preferred_port | string }}']
+      changed_when: false
+      register: es_preflight
+    - name: Record selected port
+      ansible.builtin.set_fact:
+        es_selected_port: '{{ (es_preflight.stdout | from_json).port }}'
+    - name: Save selected port for future deployments
+      ansible.builtin.copy:
+        dest: /etc/effortlesssmiles/port
+        content: "{{ es_selected_port }}\n"
+        owner: root
+        group: root
+        mode: '0644'
+    - name: Read official Node release catalog
+      ansible.builtin.uri:
+        url: https://nodejs.org/dist/index.json
+        return_content: true
+        validate_certs: true
+      register: es_node_catalog
+    - name: Select latest Node 24 LTS without changing system Node
+      ansible.builtin.set_fact:
+        es_node_version: '{{ (es_node_catalog.json | selectattr("version", "match", "^v" ~ es_node_major ~ "\\.") | selectattr("lts") | first).version }}'
+        es_node_arch: '{{ {"x86_64":"x64", "aarch64":"arm64"}[ansible_facts.architecture] }}'
+    - name: Record private Node installation path
+      ansible.builtin.set_fact:
+        es_node_dir: '{{ es_root }}/runtime/node-{{ es_node_version }}-linux-{{ es_node_arch }}'
+    - name: Download checksum-verified official Node distribution
+      ansible.builtin.get_url:
+        url: 'https://nodejs.org/dist/{{ es_node_version }}/node-{{ es_node_version }}-linux-{{ es_node_arch }}.tar.xz'
+        dest: '{{ es_root }}/runtime/node-{{ es_node_version }}-linux-{{ es_node_arch }}.tar.xz'
+        checksum: 'sha256:https://nodejs.org/dist/{{ es_node_version }}/SHASUMS256.txt'
+        mode: '0644'
+    - name: Extract private Node runtime
+      ansible.builtin.unarchive:
+        src: '{{ es_root }}/runtime/node-{{ es_node_version }}-linux-{{ es_node_arch }}.tar.xz'
+        dest: '{{ es_root }}/runtime'
+        remote_src: true
+        creates: '{{ es_node_dir }}/bin/node'
+    - name: Install pinned private build package manager
+      ansible.builtin.command:
+        argv: ['{{ es_node_dir }}/bin/node', '{{ es_node_dir }}/lib/node_modules/npm/bin/npm-cli.js', install, --prefix, '{{ es_root }}/runtime/pnpm', 'pnpm@{{ es_pnpm_version }}', --ignore-scripts, --no-audit, --no-fund]
+        creates: '{{ es_root }}/runtime/pnpm/node_modules/pnpm/bin/pnpm.cjs'
+      environment:
+        PATH: '{{ es_node_dir }}/bin:/usr/bin:/bin'
+    - name: Create isolated source archive
+      ansible.builtin.command:
+        argv: [git, archive, --format=tar, '--output={{ es_root }}/source-{{ es_git.after }}.tar', '{{ es_git.after }}']
+        chdir: '{{ es_root }}/source'
+        creates: '{{ es_root }}/source-{{ es_git.after }}.tar'
+    - name: Create release build directory
+      ansible.builtin.file:
+        path: '{{ es_release }}'
+        state: directory
+        owner: effortlesssmiles-build
+        group: effortlesssmiles-build
+        mode: '0755'
+    - name: Extract release source
+      ansible.builtin.unarchive:
+        src: '{{ es_root }}/source-{{ es_git.after }}.tar'
+        dest: '{{ es_release }}'
+        remote_src: true
+        owner: effortlesssmiles-build
+        group: effortlesssmiles-build
+        creates: '{{ es_release }}/package.json'
+    - name: Install release dependencies with lockfile
+      become_user: effortlesssmiles-build
+      ansible.builtin.command:
+        argv: ['{{ es_node_dir }}/bin/node', '{{ es_root }}/runtime/pnpm/node_modules/pnpm/bin/pnpm.cjs', install, --frozen-lockfile, --ignore-scripts]
+        chdir: '{{ es_release }}'
+        creates: '{{ es_release }}/node_modules/.modules.yaml'
+      environment:
+        PATH: '{{ es_node_dir }}/bin:/usr/bin:/bin'
+        HOME: /var/cache/effortlesssmiles-build
+    - name: Build standalone production application
+      become_user: effortlesssmiles-build
+      ansible.builtin.command:
+        argv: ['{{ es_node_dir }}/bin/node', node_modules/vite/bin/vite.js, build, --config, deploy/node-vite.config.ts]
+        chdir: '{{ es_release }}'
+        creates: '{{ es_release }}/.standalone-built'
+      environment:
+        PATH: '{{ es_node_dir }}/bin:/usr/bin:/bin'
+        HOME: /var/cache/effortlesssmiles-build
+    - name: Mark successful standalone build
+      ansible.builtin.copy:
+        content: "{{ es_git.after }}\n"
+        dest: '{{ es_release }}/.standalone-built'
+        owner: effortlesssmiles-build
+        group: effortlesssmiles-build
+        mode: '0644'
+    - name: Make built code read-only to runtime user
+      ansible.builtin.file:
+        path: '{{ es_release }}'
+        owner: root
+        group: root
+        recurse: true
+        state: directory
+    - name: Create root-only rollback directory
+      ansible.builtin.file:
+        path: '{{ es_backup }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+    - name: Record rollback paths and back up managed configuration
+      ansible.builtin.shell: |
+        set -eu
+        for file in /etc/systemd/system/effortlesssmiles.service '{{ es_vhost }}' /etc/effortlesssmiles/runtime.env; do
+          if [ -f "$file" ]; then cp --parents "$file" '{{ es_backup }}/'; fi
+        done
+      args:
+        executable: /bin/bash
+      changed_when: true
+    - name: Inspect existing TLS certificate
+      ansible.builtin.stat:
+        path: '/etc/letsencrypt/live/{{ es_domain }}/fullchain.pem'
+      register: es_cert
+    - name: Record TLS state
+      ansible.builtin.set_fact:
+        es_tls_ready: '{{ es_cert.stat.exists }}'
+    - name: Activate and verify release with rollback on failure
+      block:
+        - name: Install exact-domain Nginx route and ACME webroot
+          ansible.builtin.template:
+            src: effortlesssmiles.nginx.j2
+            dest: '{{ es_vhost }}'
+            owner: root
+            group: root
+            mode: '0644'
+        - name: Enable only this application's Nginx site
+          ansible.builtin.file:
+            src: '{{ es_vhost }}'
+            dest: /etc/nginx/sites-enabled/effortlesssmiles.conf
+            state: link
+        - name: Validate Nginx before reload
+          ansible.builtin.command: nginx -t
+          changed_when: false
+        - name: Reload Nginx
+          ansible.builtin.systemd_service:
+            name: nginx
+            state: reloaded
+        - name: Verify local domain route beats wildcard vhosts
+          ansible.builtin.uri:
+            url: http://127.0.0.1/.es-deploy-check
+            headers:
+              Host: '{{ es_domain }}'
+            return_content: true
+            status_code: 200
+          register: es_route
+          failed_when: es_route.content != 'effortlesssmiles:' ~ es_domain
+        - name: Obtain or renew HTTPS certificate using existing web server
+          ansible.builtin.command:
+            argv: [certbot, certonly, --webroot, -w, /var/www/effortlesssmiles-acme, --cert-name, '{{ es_domain }}', -d, '{{ es_domain }}', --email, '{{ es_certbot_email }}', --agree-tos, --non-interactive, --keep-until-expiring]
+          register: es_certbot
+          changed_when: "'no action taken' not in es_certbot.stdout"
+        - name: Enable HTTPS route
+          ansible.builtin.template:
+            src: effortlesssmiles.nginx.j2
+            dest: '{{ es_vhost }}'
+            owner: root
+            group: root
+            mode: '0644'
+          vars:
+            es_tls_ready: true
+        - name: Pause this application's public requests during database cutover
+          ansible.builtin.copy:
+            dest: /run/effortlesssmiles-maintenance
+            content: 'Deployment in progress\n'
+            owner: root
+            group: root
+            mode: '0644'
+        - name: Validate TLS Nginx configuration
+          ansible.builtin.command: nginx -t
+          changed_when: false
+        - name: Reload verified TLS configuration
+          ansible.builtin.systemd_service:
+            name: nginx
+            state: reloaded
+        - name: Stop old application before database snapshot
+          ansible.builtin.systemd_service:
+            name: effortlesssmiles
+            state: stopped
+          when: es_previous | length > 0
+        - name: Snapshot persistent database with SQLite backup API
+          ansible.builtin.shell: |
+            python3 - <<'PY'
+            import pathlib,sqlite3
+            source=pathlib.Path('/var/lib/effortlesssmiles/studio.sqlite3')
+            if source.exists():
+                with sqlite3.connect(source) as src, sqlite3.connect('{{ es_backup }}/studio.sqlite3') as dst:src.backup(dst)
+            PY
+          changed_when: true
+        - name: Generate first administrator credential file once
+          ansible.builtin.shell: |
+            python3 - <<'PY'
+            import json,os,secrets
+            path='/etc/effortlesssmiles/bootstrap-admin.json'
+            if not os.path.exists(path):
+                fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+                with os.fdopen(fd,'w') as f:json.dump({'email':'{{ es_admin_email }}','password':secrets.token_urlsafe(32)},f)
+            PY
+          args:
+            creates: /etc/effortlesssmiles/bootstrap-admin.json
+          no_log: true
+        - name: Load private administrator bootstrap input
+          ansible.builtin.slurp:
+            src: /etc/effortlesssmiles/bootstrap-admin.json
+          register: es_bootstrap
+          no_log: true
+        - name: Apply standalone database migrations
+          become_user: effortlesssmiles
+          ansible.builtin.command:
+            argv: ['{{ es_node_dir }}/bin/node', deploy/manage.mjs, init]
+            chdir: '{{ es_release }}'
+          environment:
+            ES_DATA_DIR: /var/lib/effortlesssmiles
+          changed_when: true
+        - name: Initialize administrator without resetting an existing account
+          become_user: effortlesssmiles
+          ansible.builtin.command:
+            argv: ['{{ es_node_dir }}/bin/node', deploy/manage.mjs, bootstrap-admin]
+            chdir: '{{ es_release }}'
+            stdin: '{{ es_bootstrap.content | b64decode }}'
+          environment:
+            ES_DATA_DIR: /var/lib/effortlesssmiles
+          no_log: true
+          changed_when: true
+        - name: Create protected runtime settings preserving existing payment secrets
+          ansible.builtin.copy:
+            dest: /etc/effortlesssmiles/runtime.env
+            content: |
+              ES_DATA_DIR=/var/lib/effortlesssmiles
+              ES_PUBLIC_ORIGIN=https://{{ es_domain }}
+              ES_PORT={{ es_selected_port }}
+              NODE_ENV=production
+            force: false
+            owner: root
+            group: effortlesssmiles
+            mode: '0640'
+        - name: Reconcile only managed runtime paths and port
+          ansible.builtin.lineinfile:
+            path: /etc/effortlesssmiles/runtime.env
+            regexp: '^{{ item.key }}='
+            line: '{{ item.key }}={{ item.value }}'
+            owner: root
+            group: effortlesssmiles
+            mode: '0640'
+          loop:
+            - {key: ES_DATA_DIR, value: /var/lib/effortlesssmiles}
+            - {key: ES_PUBLIC_ORIGIN, value: 'https://{{ es_domain }}'}
+            - {key: ES_PORT, value: '{{ es_selected_port }}'}
+            - {key: NODE_ENV, value: production}
+        - name: Atomically switch release symlink
+          ansible.builtin.shell: |
+            set -eu
+            ln -s '{{ es_release }}' '{{ es_root }}/current.next'
+            mv -Tf '{{ es_root }}/current.next' '{{ es_root }}/current'
+          args:
+            executable: /bin/bash
+          changed_when: true
+        - name: Install hardened application service
+          ansible.builtin.template:
+            src: effortlesssmiles.service.j2
+            dest: /etc/systemd/system/effortlesssmiles.service
+            owner: root
+            group: root
+            mode: '0644'
+        - name: Start standalone production service
+          ansible.builtin.systemd_service:
+            name: effortlesssmiles
+            daemon_reload: true
+            enabled: true
+            state: restarted
+        - name: Verify process and database health
+          ansible.builtin.uri:
+            url: 'http://127.0.0.1:{{ es_selected_port }}/healthz'
+            status_code: 200
+          register: es_health
+          until: es_health.status | default(0) == 200
+          retries: 15
+          delay: 2
+        - name: Verify catalog and demo endpoints before opening traffic
+          ansible.builtin.uri:
+            url: 'http://127.0.0.1:{{ es_selected_port }}{{ item }}'
+            status_code: 200
+          loop: [/api/studio, '/api/demo?role=customer', /install, /downloads/effortless-smiles-preview.apk]
+        - name: Resume application traffic
+          ansible.builtin.file:
+            path: /run/effortlesssmiles-maintenance
+            state: absent
+        - name: Verify local HTTPS certificate and exact domain routing
+          ansible.builtin.command:
+            argv: [curl, --fail, --silent, --show-error, --resolve, '{{ es_domain }}:443:127.0.0.1', 'https://{{ es_domain }}/healthz']
+          changed_when: false
+        - name: Write successful deployment report
+          ansible.builtin.copy:
+            dest: '{{ es_report }}'
+            owner: effortlesssmiles
+            group: effortlesssmiles
+            mode: '0640'
+            content: '{{ {"status":"ready","domain":es_domain,"origin":"https://" ~ es_domain,"port":es_selected_port|int,"listen":"127.0.0.1","source":es_git.after,"release":es_release,"current":es_root ~ "/current","database":"/var/lib/effortlesssmiles/studio.sqlite3","environment":"/etc/effortlesssmiles/runtime.env","nginx":es_vhost,"backup":es_backup,"administrator_credentials":"/etc/effortlesssmiles/bootstrap-admin.json","documents":es_root ~ "/current/docs/OLAMIDEPANEL_DEPLOYMENT.md","payments":"Requires configured merchant credentials; demo transactions remain blocked"} | to_nice_json }}'
+      rescue:
+        - name: Stop failed application during rollback
+          ansible.builtin.systemd_service:
+            name: effortlesssmiles
+            state: stopped
+          failed_when: false
+        - name: Restore previous managed files and database snapshot
+          ansible.builtin.shell: |
+            set -eu
+            for file in /etc/systemd/system/effortlesssmiles.service '{{ es_vhost }}' /etc/effortlesssmiles/runtime.env; do
+              if [ -f '{{ es_backup }}'"$file" ]; then cp '{{ es_backup }}'"$file" "$file"; fi
+            done
+            if [ -f '{{ es_backup }}/studio.sqlite3' ]; then
+              rm -f /var/lib/effortlesssmiles/studio.sqlite3-wal /var/lib/effortlesssmiles/studio.sqlite3-shm
+              cp '{{ es_backup }}/studio.sqlite3' /var/lib/effortlesssmiles/studio.sqlite3
+              chown effortlesssmiles:effortlesssmiles /var/lib/effortlesssmiles/studio.sqlite3
+              chmod 0640 /var/lib/effortlesssmiles/studio.sqlite3
+            fi
+            if [ -n '{{ es_previous }}' ]; then
+              ln -sfn '{{ es_previous }}' '{{ es_root }}/current.rollback'
+              mv -Tf '{{ es_root }}/current.rollback' '{{ es_root }}/current'
+            else
+              rm -f /etc/nginx/sites-enabled/effortlesssmiles.conf
+            fi
+            rm -f /run/effortlesssmiles-maintenance
+          args:
+            executable: /bin/bash
+          changed_when: true
+        - name: Disable incomplete first installation
+          ansible.builtin.systemd_service:
+            name: effortlesssmiles
+            enabled: false
+          when: es_previous | length == 0
+          failed_when: false
+        - name: Remove incomplete first-install activation link
+          ansible.builtin.file:
+            path: '{{ es_root }}/current'
+            state: absent
+          when: es_previous | length == 0
+        - name: Reload restored service units
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+        - name: Restart previous application if available
+          ansible.builtin.systemd_service:
+            name: effortlesssmiles
+            state: started
+          when: es_previous | length > 0
+          failed_when: false
+        - name: Validate restored Nginx configuration
+          ansible.builtin.command: nginx -t
+          changed_when: false
+        - name: Reload restored domain routing
+          ansible.builtin.systemd_service:
+            name: nginx
+            state: reloaded
+        - name: Record failure and rollback location
+          ansible.builtin.copy:
+            dest: '{{ es_report }}'
+            owner: effortlesssmiles
+            group: effortlesssmiles
+            mode: '0640'
+            content: '{{ {"status":"failed","rolled_back":es_previous|length>0,"domain":es_domain,"backup":es_backup,"reason":ansible_failed_result.msg|default("Check journalctl -u effortlesssmiles and nginx -t")} | to_nice_json }}'
+        - name: Stop with reviewable diagnostic
+          ansible.builtin.fail:
+            msg: 'Deployment failed. Existing application restored when available. See {{ es_report }} and {{ es_backup }}.'
+    - name: Report installed paths without exposing credentials
+      ansible.builtin.debug:
+        msg:
+          - 'Website: https://{{ es_domain }} · Sign in: /login · Demos: /demo · Mobile: /install'
+          - 'Port: 127.0.0.1:{{ es_selected_port }} · Panel port 8090 untouched'
+          - 'Report: {{ es_report }}'
+          - 'Initial administrator credential file (root only): /etc/effortlesssmiles/bootstrap-admin.json'

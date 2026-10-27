@@ -50,3 +50,8 @@ yarn-error.log*
 *.p12
 *.jks
 *.idsig
+
+# Standalone deployment and test state
+__pycache__/
+*.pyc
+.standalone-built

@@ -1,0 +1,14 @@
+import fs from 'node:fs';import path from 'node:path';import {randomUUID} from 'node:crypto';import {sqlite} from './node-env.mjs';import {hashPassword} from './sessions.mjs';
+const db=sqlite();
+if(process.argv[2]==='init'){
+ db.exec('CREATE TABLE IF NOT EXISTS local_migrations(name TEXT PRIMARY KEY);');
+ for(const file of fs.readdirSync(path.join(process.cwd(),'drizzle')).filter(f=>f.endsWith('.sql')).sort())if(!db.prepare('SELECT 1 FROM local_migrations WHERE name=?').get(file)){db.exec('BEGIN IMMEDIATE');try{db.exec(fs.readFileSync(path.join(process.cwd(),'drizzle',file),'utf8'));db.prepare('INSERT INTO local_migrations VALUES (?)').run(file);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}}
+ db.exec('CREATE TABLE IF NOT EXISTS local_accounts(user_id TEXT PRIMARY KEY REFERENCES members(id),email TEXT UNIQUE NOT NULL,password TEXT NOT NULL); CREATE TABLE IF NOT EXISTS local_sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES members(id),expires INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS local_attempts(bucket TEXT PRIMARY KEY,attempts INTEGER NOT NULL,started INTEGER NOT NULL);');
+ console.log('Standalone database migrations ready');
+}else if(process.argv[2]==='bootstrap-admin'){
+ const input=JSON.parse(fs.readFileSync(0,'utf8'));const email=String(input.email||'').trim().toLowerCase();if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))throw new Error('Valid administrator email required');
+ const existing=db.prepare('SELECT m.role,m.disabled FROM local_accounts a JOIN members m ON m.id=a.user_id WHERE a.email=?').get(email);if(existing){if(existing.role!=='super_admin'||existing.disabled)throw new Error('Existing account is not an active super admin; resolve its permissions before deployment.');console.log('Existing administrator account preserved');process.exit(0);}
+ const id=randomUUID(),password=hashPassword(input.password);db.exec('BEGIN IMMEDIATE');try{db.prepare('INSERT INTO members(id,email,name,role,disabled) VALUES (?,?,?,?,0)').run(id,email,'Studio owner','super_admin');db.prepare('INSERT INTO local_accounts VALUES (?,?,?)').run(id,email,password);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}console.log('Administrator account created');
+}else if(process.argv[2]==='reset-password'){
+ const input=JSON.parse(fs.readFileSync(0,'utf8')),email=String(input.email||'').trim().toLowerCase(),hash=hashPassword(input.password);const row=db.prepare('SELECT user_id FROM local_accounts WHERE email=?').get(email);if(!row)throw new Error('Account not found');db.exec('BEGIN IMMEDIATE');try{db.prepare('UPDATE local_accounts SET password=? WHERE user_id=?').run(hash,row.user_id);db.prepare('DELETE FROM local_sessions WHERE user_id=?').run(row.user_id);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}console.log('Password changed and sessions revoked');
+}else throw new Error('Use init, bootstrap-admin, or reset-password; account JSON comes from stdin');
